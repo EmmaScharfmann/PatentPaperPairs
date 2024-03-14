@@ -1,3 +1,7 @@
+################ generate citation based PPPs ################
+
+
+## import packages and database username and password
 import pandas as pd
 import json, requests 
 import networkx as nx
@@ -5,26 +9,23 @@ import matplotlib.pyplot as plt
 import numpy as np
 from collections import Counter
 from tqdm import tqdm
-
 import time
-
 import unicodedata
 from metaphone import doublemetaphone
 from fuzzywuzzy import fuzz
 from difflib import SequenceMatcher
 import re
-
-
 from math import radians, cos, sin, asin, sqrt
-
 import datetime 
 from datetime import date
-
 import psycopg2
 
 
 
 main_path  = '/home/fs01/spec1142/Emma/PPPs/'
+
+f = open(main_path + "database.txt", "r")
+user_emma , password_emma = f.read().split()
 
 
 ## load institutions data
@@ -331,7 +332,7 @@ def paper_patent_comparison(patent_id , paper_id , dic_comparison):
 ## get patent to paper citations
 
 #establishing the connection
-conn = psycopg2.connect("user=spec1142 password=VgEpfFtDhXIU")
+conn = psycopg2.connect(database="spec1142", user=user_emma , password=password_emma , host="192.168.100.54")
 
 #Creating a cursor object using the cursor() method
 cursor = conn.cursor()
@@ -362,7 +363,7 @@ workers = 64
 def PPPs_citations(i):
     
     #establishing the connection
-    conn = psycopg2.connect("user=spec1142 password=VgEpfFtDhXIU")
+    conn = psycopg2.connect(database="spec1142", user=user_emma , password=password_emma , host="192.168.100.54")
     #Creating a cursor object using the cursor() method
     cursor = conn.cursor()
         
@@ -546,9 +547,9 @@ def PPPs_citations(i):
 
 
 
+workers = 64
 
-
-#run the code using 32 CPUs   
+#run the code using 64 CPUs   
 import warnings    
 from multiprocessing import Process
 

@@ -1,3 +1,7 @@
+################ generate scientist-inventor based PPPs ################
+
+
+## import packages and database username and password
 import pandas as pd
 import json, requests 
 import networkx as nx
@@ -5,28 +9,24 @@ import matplotlib.pyplot as plt
 import numpy as np
 from collections import Counter
 from tqdm import tqdm
-
 import time
-
 import unicodedata
 from metaphone import doublemetaphone
 from fuzzywuzzy import fuzz
 from difflib import SequenceMatcher
 import re
-
 from mpi4py import MPI
-
 from math import radians, cos, sin, asin, sqrt
-
 import datetime 
 from datetime import date
-
 import psycopg2
-
 
 
 main_path  = '/home/fs01/spec1142/Emma/PPPs/'
 
+
+f = open(main_path + "database.txt", "r")
+user_emma , password_emma = f.read().split()
 
 ## load institutions data
 dic_institutions = pd.read_csv(main_path + "institutions_up_to_20230817.tsv" , delimiter = "\t", index_col = 0).to_dict("index")
@@ -372,7 +372,7 @@ for cluster in clusters:
 def PPPs_GK(i, workers):
     
     #establishing the connection
-    conn = psycopg2.connect(database="spec1142", user="spec1142" , password="VgEpfFtDhXIU" , host="192.168.100.54")
+    conn = psycopg2.connect(database="spec1142", user=user_emma , password=password_emma , host="192.168.100.54")
     #Creating a cursor object using the cursor() method
     cursor = conn.cursor()
         
@@ -627,23 +627,21 @@ def PPPs_GK(i, workers):
 
 
     
-PPPs_GK(MPI.COMM_WORLD.Get_rank() , MPI.COMM_WORLD.Get_size())
+workers = 64
 
+#run the code using 64 CPUs   
+import warnings    
+from multiprocessing import Process
 
-
-##run the code using 32 CPUs   
-#import warnings    
-#from multiprocessing import Process
-#
-#if __name__ == '__main__':
-#    with warnings.catch_warnings():
-#        warnings.simplefilter("ignore",UserWarning)
-#        
-#        processes = [Process(target=PPPs_citations, args=(k,)) for k in range(workers)]
-#        
-#        for process in processes:
-#            process.start()
-#            
-#        for process in processes:
-#            process.join()
+if __name__ == '__main__':
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore",UserWarning)
+        
+        processes = [Process(target=PPPs_GK, args=(k,)) for k in range(workers)]
+        
+        for process in processes:
+            process.start()
+            
+        for process in processes:
+            process.join()
 

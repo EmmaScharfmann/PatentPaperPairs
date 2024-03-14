@@ -1,3 +1,7 @@
+######################################################################################################################################################## generate counts of similar papers in a window between the 5 years before and 10 years after the paoper publication ##############################################################################################################################################################################################
+
+
+## load packages 
 import pandas as pd
 import psycopg2
 from tqdm import tqdm
@@ -8,8 +12,8 @@ from collections import Counter
 import time 
 main_path = '/home/fs01/spec1142/Emma/'
 
-
-PPPs = pd.read_csv(main_path+'PPPs/PPPs_v2.tsv', delimiter = '\t')
+f = open(main_path + "database.txt", "r")
+user_emma , password_emma = f.read().split()
 
 
 ## tranform string into vector
@@ -24,6 +28,8 @@ def clean_encoding(encoded_text):
         return encoded_text
 
 
+
+## load array with all paper's abstract embedding (per year) 
 path = "/home/fs01/spec1142/Emma/test/Website/"
 
 def load_array(year ):
@@ -34,16 +40,16 @@ def load_array(year ):
     return array_abstract, array_patents
 
 
-def get_abstract(year, i):
+def get_abstract(year,workers, i):
 
     list_abstract = []
     list_papers = []
     
     papers_year = list(file[file['paperpubyear'] == year]['paper_id'])   
-    list_index = [ k for k in range(i,len(papers_year),12) ] 
+    list_index = [ k for k in range(i,len(papers_year),workers) ] 
     
     
-    conn = psycopg2.connect("user=spec1142 password=VgEpfFtDhXIU") 
+    conn = psycopg2.connect(database="spec1142", user=user_emma , password=password_emma , host="192.168.100.54")
     cursor = conn.cursor()
     
     for k in list_index:
@@ -63,7 +69,8 @@ def get_abstract(year, i):
     cursor.close()
 
     return list_papers , list_abstract
-
+    
+    
 
 
 
@@ -91,7 +98,6 @@ def count_similarity( list_abstracts , list_papers, threshold1 , threshold2,thre
 
 
 
-
 def matrix_multiplication(a,b,threshold1,threshold2,threshold3):
     a = np.array(a,dtype = np.float32)
     b = np.array(b,dtype = np.float32)
@@ -105,27 +111,26 @@ def matrix_multiplication(a,b,threshold1,threshold2,threshold3):
 
 
 
-
+## load file with the twins (loose and tight twins)
 controls = pd.read_stata(main_path + 'PPPs_twins/anticommonsredux_emma.dta')
 
 file = controls[['paper_id','pair_id','paperpubyear','app_pub_year','grant_year']]
 file['paper_id'] = file['paper_id'].astype('int')
 
 
-
-
+## define threshold
 threshold1 = 0.6
 threshold2 = 0.64
 threshold3 = 0.68
 
+workers = 12
 
-
-for year in range(1998,2009):
+for year in range(1980,2017):
 
     ##get the abstracts of the papers published in 'year'
-    p = Pool(processes=12)
-    func = partial(get_abstract, year)
-    abstracts = p.map(func, [ i  for i in range(12)])
+    p = Pool(processes=workers)
+    func = partial(get_abstract, year,workers)
+    abstracts = p.map(func, [ i  for i in range(workers)])
     p.close()
 
     ##organize the abstract into an array
@@ -144,30 +149,52 @@ for year in range(1998,2009):
         print('step1') ##the abstracts are in the array
         
 
-        ##count the number of similar papers between year and 
+        ##count the number of similar papers between year and year + 10
         p = Pool(len([ i  for i in range(year+1,min(2023,year+11))]))
         func = partial(count_similarity,list_abstracts,list_papers, threshold1,threshold2,threshold3)
-        count_similarities = p.map(func, [ i  for i in range(year+1,min(2023,year+11))])
+        count_similarities_a = p.map(func, [ i  for i in range(year+1,min(2023,year+11))])
+        p.close()
+
+        ##count the number of similar papers between year - 5 and year
+        p = Pool(len([ i  for i in range(year-5,year+1)]))
+        func = partial(count_similarity,list_abstracts,list_papers, threshold1,threshold2,threshold3)
+        count_similarities_b = p.map(func, [ i  for i in range(year-5,year+1)])
         p.close()
         
         
         print('step2') ##we have the count of similar papers
         
-        count_similarities = np.array(count_similarities)
-        count_similarities1 = count_similarities[:,0,:]
-        count_similarities2 = count_similarities[:,1,:]
-        count_similarities3 = count_similarities[:,2,:]
-        file_year = file[file['paperpubyear'] == year]
+        count_similarities_a = np.array(count_similarities_a)
+        count_similarities1_a = count_similarities_a[:,0,:]
+        count_similarities2_a = count_similarities_a[:,1,:]
+        count_similarities3_a = count_similarities_a[:,2,:]
 
+        count_similarities_b = np.array(count_similarities_b)
+        count_similarities1_b = count_similarities_b[:,0,:]
+        count_similarities2_b = count_similarities_b[:,1,:]
+        count_similarities3_b = count_similarities_b[:,2,:]
+        
+        
+        file_year = file[file['paperpubyear'] == year]
         df = pd.DataFrame()
         df['paper_id'] = [ int(elem[1:]) for elem in list_papers ] 
-        for k in range(len(count_similarities)):
-            df['count_year_' + str(k) + '_' + str(threshold1)] = count_similarities1[k]
-            df['count_year_' + str(k) + '_' + str(threshold2)] = count_similarities2[k]
-            df['count_year_' + str(k) + '_' + str(threshold3)] = count_similarities3[k]
         
+        for k in range(len(count_similarities_a)):
+            df['count_after_' + str(k+1) + '_' + str(threshold1)] = count_similarities1_a[k]
+            df['count_after_' + str(k+1) + '_' + str(threshold2)] = count_similarities2_a[k]
+            df['count_after_' + str(k+1) + '_' + str(threshold3)] = count_similarities3_a[k]
 
-        file_year.merge(df , on = 'paper_id' , how = 'left')
+        last = 5
+        for k in range(len(count_similarities_b)):
+            df['count_before_' + str(last-k) + '_' + str(threshold1)] = count_similarities1_b[k]
+            df['count_before_' + str(last-k) + '_' + str(threshold2)] = count_similarities2_b[k]
+            df['count_before_' + str(last-k) + '_' + str(threshold3)] = count_similarities3_b[k]
+
+
+        file_year = file_year.merge(df , on = 'paper_id' , how = 'left')
+        file_year = file_year.drop_duplicates()
+        
         file_year.to_csv(main_path + 'PPPs/counts_' + str(year) + '.tsv' , sep = "\t")
         
+
 
