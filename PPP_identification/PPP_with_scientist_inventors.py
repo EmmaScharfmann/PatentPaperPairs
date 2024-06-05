@@ -1,4 +1,4 @@
-################ generate citation based PPPs ################
+################ generate scientist-inventor based PPPs ################
 
 
 ## import packages and database username and password
@@ -15,18 +15,18 @@ from metaphone import doublemetaphone
 from fuzzywuzzy import fuzz
 from difflib import SequenceMatcher
 import re
+from mpi4py import MPI
 from math import radians, cos, sin, asin, sqrt
 import datetime 
 from datetime import date
 import psycopg2
 
 
-
 main_path  = '/home/fs01/spec1142/Emma/PPPs/'
+
 
 f = open(main_path + "database.txt", "r")
 user_emma , password_emma = f.read().split()
-
 
 ## load institutions data
 dic_institutions = pd.read_csv(main_path + "institutions_up_to_20230817.tsv" , delimiter = "\t", index_col = 0).to_dict("index")
@@ -327,226 +327,321 @@ def paper_patent_comparison(patent_id , paper_id , dic_comparison):
         
         
 
-        
-
-## get patent to paper citations
-
-#establishing the connection
-conn = psycopg2.connect(database="spec1142", user=user_emma , password=password_emma , host="192.168.100.54")
-
-#Creating a cursor object using the cursor() method
-cursor = conn.cursor()
-
-text = """ SELECT  patent_id, work_id
-           FROM non_patent_citations_matt_marx
-           WHERE SUBSTRING(patent_id , 1 , 2) = 'us' AND self = 'isself'
-           ;"""
-
-cursor.execute(text)
-patent_paper_citations = cursor.fetchall()
-
-
-conn.close()
 
 
 
-
-        
-        
-        
 import warnings
 warnings.filterwarnings("ignore")
 
 
-workers = 64
 
-def PPPs_citations(i):
+df_gatekeepers = pd.read_csv(main_path + "gatekeepers_clean_v2.tsv", delimiter = "\t")
+
+data = df_gatekeepers[["inventor_id" , "author_id"]].to_numpy()
+
+clusters = []
+G = nx.Graph()
+G.add_edges_from(data)
+count = 0 
+for connected_component in nx.connected_components(G):
+    clusters.append(connected_component)
+    
+#print("Number of gatekeepers:" , len(clusters))
+
+
+
+
+dic_clusters = {}
+count = 0 
+
+for cluster in clusters:
+    dic_clusters[count] = {}
+    dic_clusters[count]["OA"] = []
+    dic_clusters[count]["PV"] = []
+    for elem in cluster:
+        
+        if elem[0] == "A":
+            dic_clusters[count]["OA"].append(   elem  )
+        else:
+            dic_clusters[count]["PV"].append( elem )
+        
+    count += 1
+
+
+
+def PPPs_GK(i):
+
+        """
+    This function identifies potential PPPs (Patent-Paper Pairs) for a given range of scientist-inventors by querying a PostgreSQL database and comparing the patents and papers associated with each gatekeeper.
+
+    Parameters:
+    i (int): The starting index for the range of gatekeepers to be analyzed.
+
+    Note:
+    - The function establishes a connection to a PostgreSQL database using the `psycopg2` library.
+    - The function queries the patents and papers data for each gatekeeper in the specified range and stores the data in a dictionary `dic_comparison`.
+    - The function compares each patent with each paper associated with the same gatekeeper using the `paper_patent_comparison` function.
+    - The function uses a Random Forest classifier to predict if the patents and papers are PPPs based on the similarity features calculated in the `paper_patent_comparison` function.
+    - The function saves the potential PPPs in a dictionary `dic_features` and saves the dictionary to a TSV file every 1000 iterations.
+    - The function also saves the errors encountered during the execution in a separate file.
+    """
     
     #establishing the connection
     conn = psycopg2.connect(database="spec1142", user=user_emma , password=password_emma , host="192.168.100.54")
     #Creating a cursor object using the cursor() method
     cursor = conn.cursor()
         
+    ##number of gatekeeper to analyse 
+    size = len(dic_clusters)
     ##new output file: will store the potential PPPs. 
     dic_features = {}
     
-    ##count the number of iteration realized - dic_features will be saved at 10000 iterations 
+    ##count the number of iteration realized - dic_features will be saved at 100 iterations 
     k = 0
-    index = [ k for k in range(i , len(patent_paper_citations) , workers) ]
     
-    for count in index:
-
-            
+    for count in range(i,size,workers):
+        
         k += 1 
-    
-        elem = patent_paper_citations[count]
-
+        
         try:
-    
-            paper_id  = elem[1]
-            patent_id = elem[0].split("-")[1]
+            
             
             ##dic_comparison stores all the papers (key: "OA"), patents data (key: "PV") and comparison between papers and patents ("comparisons")  corresponding the gatekeeper
             dic_comparison = {}
             dic_comparison["PV"] = {}
             dic_comparison["OA"] = {}
             dic_comparison["comparisons"] = {}
+
+
+            ##query the papers corresponding to the author id
+            ##paper_ids stores the papers written by the gatekeepers
+            paper_ids  = set()
+            for author_id in dic_clusters[count]["OA"]:
+
+                new_paper_ids  = set()
+
+                text = """ SELECT work_id
+                            FROM works_authors_OpenAlex 
+                            WHERE author_id = '""" + author_id + """';"""
+
+                cursor.execute(text)
+                res = cursor.fetchall()
+
+                for line in res:
+                    new_paper_ids.add(line[0])
+                paper_ids = paper_ids.union(new_paper_ids)
+
+            
+            ##query the patents corresponding to the inventor id
+            ##patent_ids stores the patents written by the gatekeepers
+            patent_ids = set()
+            for inventor_id in dic_clusters[count]["PV"]:
+
+                new_patent_ids  = set()
+
+
+                text = """ SELECT patent_id
+                            FROM inventors_PatentsView  
+                            WHERE inventor_id = '""" + inventor_id + """';"""
+
+                cursor.execute(text)  
+                res = cursor.fetchall()
+
+                for line in res:
+                    new_patent_ids.add(line[0])
+
+                    patent_ids = patent_ids.union(new_patent_ids)
+
+
+            
+
             ##query the patents data, and store the data in dic_comparison["PV"]
-            dic_comparison_new = {}
-            
-            text = """ SELECT   p.patent_date , 
-                                ap.filing_date , 
-                                string_agg( CONCAT(disambig_inventor_name_first , ' ' , disambig_inventor_name_last  ) , '#') , 
-                                pe.encoded_title , 
-                                pe.encoded_abstract , 
-                                string_agg( CONCAT(a.disambig_assignee_organization  , '%' , l.longitude , '%' , l.latitude)  , '#')
-                        FROM patents_PatentsView AS p 
-                        JOIN applications_PatentsView AS ap ON ap.patent_id = p.patent_id
-                        JOIN inventors_PatentsView AS i ON i.patent_id =  p.patent_id
-                        JOIN assignees_PatentsView AS a ON a.patent_id =  p.patent_id
-                        JOIN locations_PatentsView AS l ON a.location_id = l.location_id
-                        JOIN encoded_patents_PatentsView AS pe ON pe.patent_id = p.patent_id
-                        WHERE p.patent_id = '""" + patent_id  + """'
-                        GROUP BY p.patent_date , 
-                                ap.filing_date , 
-                                pe.encoded_title , 
-                                pe.encoded_abstract ;"""
-                    
-            cursor.execute(text)
-            res = cursor.fetchall()
-            
-            for line in res:
-                dic_comparison_new["patent_date"] = line[0]
-                dic_comparison_new["filing_date"] = line[1]
-                dic_comparison_new["co_inventors"] = [ normalize(elem) for elem in set(line[2].split("#")) ] 
-                if line[0] != 0:
-                    dic_comparison_new["title"] = clean_encoding(line[3])
-                if line[1] != 0:
-                    dic_comparison_new["abstract"] = clean_encoding(line[4])
-                if line[5] != None:
-                    locations = [ elem.split("%") for elem in set(line[5].split("#"))] 
-                    dic_comparison_new["assignees"] = ", ".join([ elem[0] for elem in locations])
-                    dic_comparison_new["coordinates"] = [ (float(elem[1]) , float(elem[2]))for elem in locations if len(elem) > 2 ]
-                else:
-                    dic_comparison_new["assignees"] = None
-                    dic_comparison_new["coordinates"] = []
-            dic_comparison["PV"][patent_id] = dic_comparison_new
-            
+            for patent_id in patent_ids:
+
+                dic_comparison_new = {}
+        
+
+                ##query the patents data, and store the data in dic_comparison["PV"]
+                dic_comparison_new = {}
+                
+                text = """ SELECT   p.patent_date , 
+                                    ap.filing_date , 
+                                    string_agg( CONCAT(disambig_inventor_name_first , ' ' , disambig_inventor_name_last  ) , '#') , 
+                                    pe.encoded_title , 
+                                    pe.encoded_abstract , 
+                                    string_agg( CONCAT(a.disambig_assignee_organization  , '%' , l.longitude , '%' , l.latitude)  , '#')
+                            FROM patents_PatentsView AS p 
+                            JOIN applications_PatentsView AS ap ON ap.patent_id = p.patent_id
+                            JOIN inventors_PatentsView AS i ON i.patent_id =  p.patent_id
+                            JOIN assignees_PatentsView AS a ON a.patent_id =  p.patent_id
+                            JOIN locations_PatentsView AS l ON a.location_id = l.location_id
+                            JOIN encoded_patents_PatentsView AS pe ON pe.patent_id = p.patent_id
+                            WHERE p.patent_id = '""" + patent_id  + """'
+                            GROUP BY p.patent_date , 
+                                    ap.filing_date , 
+                                    pe.encoded_title , 
+                                    pe.encoded_abstract ;"""
+                        
+                cursor.execute(text)
+                res = cursor.fetchall()
+                
+                for line in res:
+                    dic_comparison_new["patent_date"] = line[0]
+                    dic_comparison_new["filing_date"] = line[1]
+                    if line[2] != None:
+                        dic_comparison_new["co_inventors"] = [ normalize(elem) for elem in set(line[2].split("#")) ] 
+                    else:
+                        dic_comparison_new["co_inventors"] = []
+                        
+                    try:
+                        dic_comparison_new["title"] = clean_encoding(line[3])
+                    except:
+                        dic_comparison_new["title"] = None
+                    try:
+                        dic_comparison_new["abstract"] = clean_encoding(line[4])
+                    except:
+                        dic_comparison_new["abstract"] = None
+                    if line[5] != None:
+                        locations = [ elem.split("%") for elem in set(line[5].split("#"))] 
+                        dic_comparison_new["assignees"] = ", ".join([ elem[0] for elem in locations])
+                        dic_comparison_new["coordinates"] = [ (float(elem[1]) , float(elem[2]))for elem in locations if len(elem) > 2 ]
+                    else:
+                        dic_comparison_new["assignees"] = None
+                        dic_comparison_new["coordinates"] = []
+                dic_comparison["PV"][patent_id] = dic_comparison_new
+
+
+        
             ##query papers data and store the data in dic_comparison["OA"]
-            dic_comparison_new = {}
-            text = """ SELECT   we.encoded_title , 
-                        we.encoded_abstract , 
-                        w.publication_date , 
-                        w.type , 
-                        string_agg(a.display_name , '#') , 
-                        string_agg(wa.institution_name , '#') , 
-                        string_agg(wa.institution_id , '#')
-               FROM works_authors_OpenAlex AS wa
-               JOIN works_OpenAlex AS w ON w.work_id = wa.work_id
-               JOIN authors_OpenAlex AS a ON wa.author_id = a.author_id
-               JOIN encoded_works_OpenAlex AS we ON we.work_id = wa.work_id
-               WHERE wa.work_id =  '""" + paper_id + """'
-               GROUP BY we.encoded_title , 
-                        we.encoded_abstract , 
-                        w.publication_date , 
-                        w.type;"""
+            for paper_id in paper_ids:
+
+
+                dic_comparison_new = {}
+                ##query papers data and store the data in dic_comparison["OA"]
+                dic_comparison_new = {}
+                text = """ SELECT   we.encoded_title , 
+                            we.encoded_abstract , 
+                            w.publication_date , 
+                            w.type , 
+                            string_agg(a.display_name , '#') , 
+                            string_agg(wa.institution_name , '#') , 
+                            string_agg(wa.institution_id , '#'),
+                            w.doi
             
-            cursor.execute(text)
-            res = cursor.fetchall()
-            
-            for line in res:
-                try:
-                    dic_comparison_new["title"]  = clean_encoding(line[0])
-                except: 
-                    dic_comparison_new["title"] = None
-                try: 
-                    dic_comparison_new["abstract"]  = clean_encoding(line[1])
-                except: 
-                    dic_comparison_new["abstract"] = None
-                dic_comparison_new["publication_date"] = line[2]
-                dic_comparison_new["type"] = line[3]
-                dic_comparison_new["co_authors"] = [ normalize(elem) for elem in set(line[4].split("#") )] 
-        
-                dic_comparison_new["institutions"] = set()
-                if line[5] != None:
-                    dic_comparison_new["institutions"] = set( line[5].split("#") )
-                    
-                if line[6] != None:
-                    inst_ids = set(line[6].split("#"))
-                else:
-                    inst_ids = []
-                    
-                dic_comparison_new["coordinates"] = []
-                for inst_id in inst_ids:
-                        if inst_id in dic_institutions:
-                            dic_comparison_new["coordinates"].append((dic_institutions[inst_id]["longitude"] , dic_institutions[inst_id]["latitude"]))
-                            dic_comparison_new["institutions"].union(dic_institutions[inst_id]["display_name"])
-                dic_comparison_new["institutions"] = "; ".join(list(dic_comparison_new["institutions"]))
-        
-            
-            dic_comparison["OA"][paper_id]  = dic_comparison_new
-            
-            ##compare all the patents and papers together
-            dic_comparison["comparisons"][patent_id] = {}
-            
-            ##compare patent_id with paper_id
-            if dic_comparison["OA"][paper_id] != {} and dic_comparison["PV"][patent_id] != {}:
-                dic_comparison = paper_patent_comparison(patent_id , paper_id , dic_comparison)
-                table = pd.DataFrame(dic_comparison["comparisons"][patent_id]).T[['title_similarity', 'abstract_similarity', 'authors in common', 'proportion inventors','distance_inst_assignee']]
+                        
+                   FROM works_authors_OpenAlex AS wa
+                   JOIN works_OpenAlex AS w ON w.work_id = wa.work_id
+                   JOIN authors_OpenAlex AS a ON wa.author_id = a.author_id
+                   JOIN encoded_works_OpenAlex AS we ON we.work_id = wa.work_id
+                   WHERE wa.work_id =  '""" + paper_id + """'
+                   GROUP BY we.encoded_title , 
+                            we.encoded_abstract , 
+                            w.publication_date , 
+                            w.type,
+                            w.doi;"""
                 
-                ##if the distance is missing (if the assignee or institution location is missing) 
-                ##replace the missing value with the average distance between the papers and the patents
-                mean = table["distance_inst_assignee"].mean()
-                table["distance_inst_assignee"] = table["distance_inst_assignee"].fillna(mean)
+                cursor.execute(text)
+                res = cursor.fetchall()
                 
-                ##drop all the papers and patents comparison with missing values (abstract, title, etc...)
-                table = table.dropna()
+                for line in res:
+                    try:
+                        dic_comparison_new["title"]  = clean_encoding(line[0])
+                    except: 
+                        dic_comparison_new["title"] = None
+                    try: 
+                        dic_comparison_new["abstract"]  = clean_encoding(line[1])
+                    except: 
+                        dic_comparison_new["abstract"] = None
+                    dic_comparison_new["publication_date"] = line[2]
+                    dic_comparison_new["type"] = line[3]
+                    dic_comparison_new["co_authors"] = [ normalize(elem) for elem in set(line[4].split("#") )] 
+            
+                    dic_comparison_new["institutions"] = set()
+                    if line[5] != None:
+                        dic_comparison_new["institutions"] = set( line[5].split("#") )
+                        
+                    if line[6] != None:
+                        inst_ids = set(line[6].split("#"))
+                    else:
+                        inst_ids = []
+                        
+                    dic_comparison_new["coordinates"] = []
+                    for inst_id in inst_ids:
+                            if inst_id in dic_institutions:
+                                dic_comparison_new["coordinates"].append((dic_institutions[inst_id]["longitude"] , dic_institutions[inst_id]["latitude"]))
+                                dic_comparison_new["institutions"].union(dic_institutions[inst_id]["display_name"])
+                    dic_comparison_new["institutions"] = "; ".join(list(dic_comparison_new["institutions"]))
+
+                    dic_comparison_new["doi"] = line[7]
+            
                 
-                ##predict if the patents and papers are PPPs
-                if len(table) > 0:
-        
-                    table["predictions"] = rf.predict_proba(table)[:,1]
+                dic_comparison["OA"][paper_id]  = dic_comparison_new
+
+
+
+            for patent_id in patent_ids:
+                ##compare all the patents and papers together
+                dic_comparison["comparisons"][patent_id] = {}
+                for paper_id in paper_ids:
+
+                    ##compare patent_id with paper_id
+                    if dic_comparison["OA"][paper_id] != {} and dic_comparison["PV"][patent_id] != {}:
+                        dic_comparison = paper_patent_comparison(patent_id , paper_id , dic_comparison)
+                        
+
+                if len(dic_comparison["comparisons"][patent_id]) > 0:
+                    table = pd.DataFrame(dic_comparison["comparisons"][patent_id]).T[['title_similarity', 'abstract_similarity', 'authors in common', 'proportion inventors','distance_inst_assignee']]
                     
-                    ##keep only keep the prediction higher than 0.2 and the highest prediction (with a precision of 0.05)
-                    max_pred = max(table["predictions"])
-                    PPPs_paper_ids = table[ ( table["predictions"] > max_pred - 0.05 ) &  ( table["predictions"] > 0.7 )][["predictions"]].to_dict("index")
+                    ##if the distance is missing (if the assignee or institution location is missing) 
+                    ##replace the missing value with the average distance between the papers and the patents
+                    mean = table["distance_inst_assignee"].mean()
+                    table["distance_inst_assignee"] = table["distance_inst_assignee"].fillna(mean)
                     
-                    ##write the selected PPPs in the output file dic_features 
-                    for paper_id in PPPs_paper_ids:
+                    ##drop all the papers and patents comparison with missing values (abstract, title, etc...)
+                    table = table.dropna()
+                    
+                    ##predict if the patents and papers are PPPs
+                    if len(table) > 0:
+                
+                        table["predictions"] = rf.predict_proba(table)[:,1]
+                        
+                        ##keep only keep the prediction higher than 0.2 and the highest prediction (with a precision of 0.05)
+                        max_pred = max(table["predictions"])
+                        PPPs_paper_ids = table[ ( table["predictions"] > max_pred - 0.05 ) &  ( table["predictions"] > 0.7 )][["predictions"]].to_dict("index")
+                        
+                        ##write the selected PPPs in the output file dic_features 
+                        for paper_id in PPPs_paper_ids:
                             dic_features[paper_id + " US-" + patent_id] = dic_comparison["comparisons"][patent_id][paper_id]
                             dic_features[paper_id + " US-" + patent_id]["paper_id"] = paper_id
                             dic_features[paper_id + " US-" + patent_id]["patent_id"] = patent_id
+                            dic_features[paper_id + " US-" + patent_id]["doi"] = dic_comparison["OA"][paper_id]["doi"]
                             dic_features[paper_id + " US-" + patent_id]["prediction"] = PPPs_paper_ids[paper_id]["predictions"]
-        except:
-            file_error = main_path + "PPPs_citations/errors"
-            file_object = open(file_error, 'a')
-            file_object.write(paper_id + " US-" + patent_id + "\n")
-            file_object.close()
-
         
+        except:
+            file_error = main_path + "PPPs_GK/errors_" + str(i) 
+            file_object = open(file_error, 'a')
+            file_object.write(str(count) + "\n")
+            file_object.close()
+            continue
+
+        ##save the output every 1000 iterations.
+        if k % 500 == 0:
+    
+            res = pd.DataFrame(dic_features).T
+            res.to_csv(main_path + "PPPs_GK/table_pred_" + str(i) + ".tsv"  , sep = "\t")
+            
     #Closing the connection
     conn.close() 
 
-        ##save the output every 10000 iterations.
-        if k % 10000 == 0:
-    
-            res = pd.DataFrame(dic_features).T
-            res.to_csv(main_path + "PPPs_citations/table_pred_" + str(i) + ".tsv"  , sep = "\t")
 
-
-    
     ##save the file as a tsv file
     res = pd.DataFrame(dic_features).T
-    res.to_csv(main_path + "PPPs_citations/table_pred_" + str(i) + ".tsv" , sep = "\t" )
+    res.to_csv(main_path + "PPPs_GK/table_pred_" + str(i) + ".tsv" , sep = "\t" )
 
-    #Closing the connection
-    conn.close()
+        
+
+
     
-    return res
-    
-
-
-
 workers = 64
 
 #run the code using 64 CPUs   
@@ -557,7 +652,7 @@ if __name__ == '__main__':
     with warnings.catch_warnings():
         warnings.simplefilter("ignore",UserWarning)
         
-        processes = [Process(target=PPPs_citations, args=(k,)) for k in range(workers)]
+        processes = [Process(target=PPPs_GK, args=(k,)) for k in range(workers)]
         
         for process in processes:
             process.start()

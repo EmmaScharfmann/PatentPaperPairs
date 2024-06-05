@@ -1,0 +1,28 @@
+# Ignore folders:
+old_files/
+PPPs_GK/
+PPPs_citations/
+data_to_post/clean_files/
+data_to_post/authors/
+data_to_post/works/
+PPP_analysis/count_similar_papers/
+
+# Ignore checkpoints
+.ipynb_checkpoints/
+
+# Ignore .npy, .json, .tsv,  .csv, .dta  files
+*.json
+*.tsv
+*.csv
+*.dta
+*.npy
+*.xlsx
+*.sav
+*.tex
+*.do
+*.out
+*.txt
+
+# keep this files 
+!predictive_model/mag_patent_ppp_Henry.csv
+
