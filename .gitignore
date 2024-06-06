@@ -6,6 +6,7 @@ data_to_post/clean_files/
 data_to_post/authors/
 data_to_post/works/
 PPP_analysis/count_similar_papers/
+PPP_analysis/get_paper_to_paper_citations.py
 
 # Ignore checkpoints
 .ipynb_checkpoints/
