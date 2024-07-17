@@ -332,7 +332,7 @@ def paper_patent_comparison(patent_id , paper_id , dic_comparison):
 ## get patent to paper citations
 
 #establishing the connection
-conn = psycopg2.connect(database="spec1142", user=user_emma , password=password_emma , host="192.168.100.54")
+conn = psycopg2.connect(database="spec1142", user=user_emma , password=password_emma , host="localhost")
 
 #Creating a cursor object using the cursor() method
 cursor = conn.cursor()
@@ -379,7 +379,7 @@ def PPPs_citations(i):
     """
     
     #establishing the connection
-    conn = psycopg2.connect(database="spec1142", user=user_emma , password=password_emma , host="192.168.100.54")
+    conn = psycopg2.connect(database="spec1142", user=user_emma , password=password_emma , host="localhost")
     #Creating a cursor object using the cursor() method
     cursor = conn.cursor()
         
